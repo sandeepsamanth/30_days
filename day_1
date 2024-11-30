@@ -1,0 +1,116 @@
+To dynamically create an array of structs where each struct holds details like the product, price, and year, you can use SQL to build and analyze such data.
+Here’s how you can organize and analyze year-wise data for laptops and their prices.
+
+
+1 . WITH laptop_data AS (
+  SELECT 
+    'Dell' AS laptop_brand,
+    ARRAY[
+      STRUCT(2022 AS year, 1000 AS price),
+      STRUCT(2023 AS year, 1100 AS price)
+    ] AS yearwise_prices
+  UNION ALL
+  SELECT 
+    'Intel' AS laptop_brand,
+    ARRAY[
+      STRUCT(2022 AS year, 900 AS price),
+      STRUCT(2023 AS year, 950 AS price),
+      STRUCT(2024 AS year, 1000 AS price)
+    ] AS yearwise_prices
+)
+SELECT * FROM laptop_data;
+
+
+//------------------------------------------------------------------------------------------------
+laptop_brand	yearwise_prices
+Dell	        [{"year":2022, "price":1000}, {"year":2023, "price":1100}]
+Intel	[       [{"year":2022, "price":900}, {"year":2023, "price":950}, {"year":2024, "price":1000}]
+//-----------------------------------------------------------------------------------------
+
+
+2.
+
+Analyze Year-wise Data
+
+WITH laptop_data AS (
+  SELECT 
+    'Dell' AS laptop_brand,
+    ARRAY[
+      STRUCT(2022 AS year, 1000 AS price),
+      STRUCT(2023 AS year, 1100 AS price)
+    ] AS yearwise_prices
+  UNION ALL
+  SELECT 
+    'Intel' AS laptop_brand,
+    ARRAY[
+      STRUCT(2022 AS year, 900 AS price),
+      STRUCT(2023 AS year, 950 AS price),
+      STRUCT(2024 AS year, 1000 AS price)
+    ] AS yearwise_prices
+)
+SELECT 
+  yearwise.year AS purchase_year,
+  laptop_brand,
+  yearwise.price
+FROM laptop_data, UNNEST(yearwise_prices) AS yearwise;
+
+
+
+/////--------------------------------------------------
+
+purchase_year	laptop_brand	price
+2022	Dell	1000
+2023	Dell	1100
+2022	Intel	900
+2023	Intel	950
+2024	Intel	1000
+
+////-----------------------------------------------
+
+
+
+3. 
+
+Perform Year-wise Aggregation
+
+SELECT 
+  yearwise.year AS purchase_year,
+  AVG(yearwise.price) AS avg_price
+FROM laptop_data, UNNEST(yearwise_prices) AS yearwise
+GROUP BY yearwise.year
+ORDER BY purchase_year;
+
+
+//----------------------------------
+purchase_year	avg_price
+2022	950.0
+2023	1025.0
+2024	1000.0
+
+//---------------------------------
+
+
+
+4. dynamically add struct 
+
+consider i already this table 
+laptop_brand	yearwise_prices
+HP	          [{"year":2023, "price":1200}, {"year":2024, "price":1300}] 
+
+
+UPDATE laptop_data
+SET yearwise_prices = ARRAY_CONCAT(
+  yearwise_prices, 
+  [STRUCT(2025 AS year, 1400 AS price)]
+)
+WHERE laptop_brand = 'HP';
+
+
+5 Using COALESCE:
+The COALESCE function will return the first non-null value from the list of values you provide. In your case, if status is not NULL, 
+       it will return status; otherwise, it will return 0.
+
+
+SELECT COALESCE(status, 0) AS status_or_zero
+FROM your_table;
+
