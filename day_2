@@ -1,0 +1,151 @@
+select * FROM player_seasons;
+
+drop TABLE players
+
+select * from players
+
+CREATE TYPE season_stats AS (
+    season INTEGER,
+    pts REAL,
+    ast REAL,
+    reb REAL,
+    weight INTEGER
+);
+
+CREATE TYPE scoring_class AS
+    ENUM ('bad', 'average', 'good', 'star');
+
+CREATE TYPE season_stats AS (
+    season INTEGER,
+    pts REAL,
+    ast REAL,
+    reb REAL,
+    weight INTEGER
+);
+
+CREATE TYPE scoring_class AS
+    ENUM ('bad', 'average', 'good', 'star');
+
+CREATE TABLE players (
+    player_name TEXT,
+    height TEXT,
+    college TEXT,
+    country TEXT,
+    draft_year TEXT,
+    draft_round TEXT,
+    draft_number TEXT,
+    seasons season_stats[],  -- array of season_stats type
+    scoring_class scoring_class,  -- scoring class ENUM
+    years_since_last_active INTEGER,
+    is_active BOOLEAN,
+    current_season INTEGER,
+    PRIMARY KEY (player_name, current_season)
+);
+CREATE TABLE players (
+    player_name TEXT,
+    height TEXT,
+    college TEXT,
+    country TEXT,
+    draft_year TEXT,
+    draft_round TEXT,
+    draft_number TEXT,
+    seasons season_stats[],  -- array of season_stats type
+    scoring_class scoring_class,  -- scoring class ENUM
+    years_since_last_active INTEGER,
+    is_active BOOLEAN,
+    current_season INTEGER,
+    PRIMARY KEY (player_name, current_season)
+);
+
+WITH last_season AS (
+    SELECT * 
+    FROM players
+    WHERE current_season = 1998
+), this_season AS (
+    SELECT 
+        player_name,
+        season, 
+        pts, 
+        ast, 
+        reb, 
+        weight
+    FROM player_seasons -- Assuming player_seasons holds per-season stats
+    WHERE season = 1999
+)
+INSERT INTO players (
+    player_name,
+    height,
+    college,
+    country,
+    draft_year,
+    draft_round,
+    draft_number,
+    seasons,
+    scoring_class,
+    is_active,
+    current_season
+)
+SELECT
+    COALESCE(ls.player_name, ts.player_name) AS player_name,
+    -- Ensure player-specific details come from the 'ls' (last_season) table
+    COALESCE(ls.height, 'Unknown') AS height,  -- Default to 'Unknown' if height is missing
+    COALESCE(ls.college, 'Unknown') AS college,  -- Default to 'Unknown' if college is missing
+    COALESCE(ls.country, 'Unknown') AS country,  -- Default to 'Unknown' if country is missing
+    COALESCE(ls.draft_year, 'Unknown') AS draft_year,  -- Default to 'Unknown' if draft_year is missing
+    COALESCE(ls.draft_round, 'Unknown') AS draft_round,  -- Default to 'Unknown' if draft_round is missing
+    COALESCE(ls.draft_number, 'Unknown') AS draft_number,  -- Default to 'Unknown' if draft_number is missing
+    -- Handling the seasons array with a default empty array if no seasons exist
+    COALESCE(ls.seasons, ARRAY[]::season_stats[]) || 
+    CASE 
+        WHEN ts.season IS NOT NULL THEN
+            ARRAY[ROW(
+                ts.season,
+                ts.pts,
+                ts.ast,
+                ts.reb, 
+                ts.weight
+            )::season_stats]
+        ELSE 
+            ARRAY[]::season_stats[] 
+    END AS seasons,
+    -- Assigning scoring class based on points in the current season
+    CASE
+        WHEN ts.pts > 20 THEN 'star'
+        WHEN ts.pts > 15 THEN 'good'
+        WHEN ts.pts > 10 THEN 'average'
+        ELSE 'bad' 
+    END::scoring_class AS scoring_class,
+    ts.season IS NOT NULL AS is_active,
+    1999 AS current_season
+FROM last_season ls
+FULL OUTER JOIN this_season ts
+    ON ls.player_name = ts.player_name;
+
+
+SELECT 
+    player_name,
+    season_stats.season,
+    season_stats.pts,
+    season_stats.ast,
+    season_stats.reb,
+    season_stats.weight
+FROM players,
+LATERAL UNNEST(seasons) AS season_stats(season, pts, ast, reb, weight)
+WHERE current_season = 1998
+  AND player_name = 'Bryant Reeves';
+
+
+  SELECT player_name,
+         UNNEST(seasons) -- CROSS JOIN UNNEST
+         -- / LATERAL VIEW EXPLODE
+  FROM players
+  WHERE current_season = 1998
+  AND player_name = 'Bryant Reeves';
+
+
+
+
+///////////////////////////////////////////output unnest
+"player_name"	"season"	"pts"	"ast"	"reb"	"weight"
+"Bryant Reeves"	1997	16.3	2.1	7.9	275
+"Bryant Reeves"	1998	10.8	1.5	5.5	275
