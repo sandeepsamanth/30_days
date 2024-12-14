@@ -1,0 +1,184 @@
+ETL pipeline example built with Apache Airflow. In this case, the pipeline will:
+Extract data from an API.
+Perform data validation, transformation, and cleansing.
+Store the transformed data into a PostgreSQL database.
+Send an email notification after the data load is successful or if it fails.
+Use XComs to pass data between tasks.
+Use PythonOperator, PostgresOperator, and EmailOperator to implement the workflow.
+This will simulate a typical ETL pipeline for handling user data in an e-commerce context.
+Scenario:
+We are extracting user data from a fictional e-commerce API.
+We validate that the extracted data contains essential fields.
+We transform the data to add a calculated column (e.g., "purchase_value" = purchase_quantity * unit_price).
+After transformation, the data is loaded into a PostgreSQL database.
+Email notifications are sent at various stages (success or failure).
+
+
+
+
+
+
+
+
+
+  
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.postgres import PostgresOperator
+from airflow.operators.email import EmailOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+from datetime import datetime, timedelta
+import requests
+import pandas as pd
+import logging
+from airflow.exceptions import AirflowException
+
+# Constants
+API_URL = 'https://api.fakeecommerce.com/v1/users'
+DATABASE_CONN_ID = 'my_postgres_conn'
+START_DATE = '2023-01-01'
+END_DATE = '2023-12-31'
+
+# Function to extract data from the API
+def extract_user_data(**kwargs):
+    try:
+        # Fetch data from the API
+        response = requests.get(API_URL)
+        response.raise_for_status()  # Raise exception for HTTP errors
+        data = response.json()
+        
+        if 'data' not in data:
+            raise ValueError('Invalid response from API, missing "data" key.')
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        # Filter data by date range
+        df = df[(df['signup_date'] >= START_DATE) & (df['signup_date'] <= END_DATE)]
+        
+        # Push data to XCom for next task
+        kwargs['ti'].xcom_push(key='user_data', value=df.to_dict())
+        
+        logging.info(f"Extracted {len(df)} records from the API.")
+    except Exception as e:
+        logging.error(f"Error extracting user data: {e}")
+        raise AirflowException(f"Error extracting user data: {e}")
+
+# Function to validate and transform the user data
+def transform_user_data(**kwargs):
+    try:
+        # Pull user data from XCom
+        ti = kwargs['ti']
+        user_data = ti.xcom_pull(task_ids='extract_user_data', key='user_data')
+
+        # Convert to DataFrame
+        df = pd.DataFrame.from_dict(user_data)
+
+        # Data Validation: Ensure required columns are present
+        required_columns = ['user_id', 'purchase_quantity', 'unit_price', 'signup_date']
+        if not all(col in df.columns for col in required_columns):
+            raise ValueError("Missing one or more required columns in the data.")
+        
+        # Transform: Calculate purchase_value (purchase_quantity * unit_price)
+        df['purchase_value'] = df['purchase_quantity'] * df['unit_price']
+        
+        # Data Cleansing: Remove users with null values in 'purchase_value'
+        df = df.dropna(subset=['purchase_value'])
+        
+        # Push transformed data to XCom
+        kwargs['ti'].xcom_push(key='transformed_data', value=df.to_dict())
+
+        logging.info(f"Transformed data: {len(df)} records after validation and cleansing.")
+    except Exception as e:
+        logging.error(f"Error transforming user data: {e}")
+        raise AirflowException(f"Error transforming user data: {e}")
+
+# Function to load transformed data into PostgreSQL
+def load_user_data_into_db(**kwargs):
+    try:
+        # Pull transformed data from XCom
+        ti = kwargs['ti']
+        transformed_data = ti.xcom_pull(task_ids='transform_user_data', key='transformed_data')
+
+        # Convert to DataFrame
+        df = pd.DataFrame.from_dict(transformed_data)
+        
+        # Use PostgresHook to interact with the database
+        hook = PostgresHook(postgres_conn_id=DATABASE_CONN_ID)
+        conn = hook.get_conn()
+        cursor = conn.cursor()
+
+        # SQL query to insert data into PostgreSQL
+        insert_sql = """
+        INSERT INTO users (user_id, purchase_quantity, unit_price, signup_date, purchase_value)
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        
+        # Create a list of tuples for insertion
+        records = [(row['user_id'], row['purchase_quantity'], row['unit_price'], row['signup_date'], row['purchase_value'])
+                   for _, row in df.iterrows()]
+        
+        # Execute batch insert
+        cursor.executemany(insert_sql, records)
+        conn.commit()
+        
+        logging.info(f"Loaded {len(df)} records into PostgreSQL.")
+    except Exception as e:
+        logging.error(f"Error loading data into PostgreSQL: {e}")
+        raise AirflowException(f"Error loading data into PostgreSQL: {e}")
+    finally:
+        cursor.close()
+
+# Function to send an email notification
+def send_email_notification(subject, body, **kwargs):
+    email_operator = EmailOperator(
+        task_id='send_email',
+        to='recipient@example.com',
+        subject=subject,
+        html_content=body,
+        dag=kwargs['dag'],
+    )
+    email_operator.execute(context=kwargs)
+
+# Default arguments for the DAG
+default_args = {
+    'owner': 'airflow',
+    'start_date': datetime(2024, 12, 14),
+    'retries': 3,
+    'retry_delay': timedelta(minutes=5),
+    'on_failure_callback': lambda context: send_email_notification("ETL Pipeline Failed", "The ETL pipeline has failed.", **context),
+    'on_success_callback': lambda context: send_email_notification("ETL Pipeline Succeeded", "The ETL pipeline has completed successfully.", **context),
+}
+
+# Define the DAG
+dag = DAG(
+    'complex_user_etl_pipeline',
+    default_args=default_args,
+    schedule_interval='@daily',
+    catchup=False,
+)
+
+# Define the tasks
+extract_task = PythonOperator(
+    task_id='extract_user_data',
+    python_callable=extract_user_data,
+    provide_context=True,
+    dag=dag,
+)
+
+transform_task = PythonOperator(
+    task_id='transform_user_data',
+    python_callable=transform_user_data,
+    provide_context=True,
+    dag=dag,
+)
+
+load_task = PythonOperator(
+    task_id='load_user_data_into_db',
+    python_callable=load_user_data_into_db,
+    provide_context=True,
+    dag=dag,
+)
+
+# Set task dependencies (ETL flow: Extract -> Transform -> Load)
+extract_task >> transform_task >> load_task 
